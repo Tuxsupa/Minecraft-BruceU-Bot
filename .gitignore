@@ -1,0 +1,10 @@
+__pycache__
+.pytest_cache/
+.ruff_cache/
+.vscode/
+.env
+fly.toml
+coordinates.png
+forsen.mp4
+forsen8.mp4
+forsen9.mp4

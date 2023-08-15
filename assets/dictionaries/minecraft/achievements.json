@@ -1,0 +1,18 @@
+{
+    "achievementPhases": [
+        "Nether",
+        "Bastion",
+        "Fortress",
+        "Stronghold",
+        "End"
+    ],
+    "achievementPriority": {
+        "Start": 0,
+        "Nether": 1,
+        "Bastion": 2,
+        "Fortress": 2,
+        "Nether Exit": 3,
+        "Stronghold": 4,
+        "End": 5
+    }
+}
