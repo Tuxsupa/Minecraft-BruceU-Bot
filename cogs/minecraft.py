@@ -1,13 +1,12 @@
 import os
-import difflib
 import time
+import datetime
 import threading
 import json
 
 import discord
 import streamlink
 import cv2
-import pytesseract
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -29,64 +28,67 @@ class IGT():
     def __init__(self, client: default.DiscordBot):
         self.client = client
 
-        self.timeIGT = None
+        self.timeIGT = datetime.time(minute=0, second=0, microsecond=0)
 
         self.templates = []
         for i in range(10):
-            template_path = f'./assets/images/minecraft/{i}.png'
-            template = cv2.imread(template_path)
+            templatePath = f'./assets/images/minecraft/{i}.png'
+            template = cv2.imread(templatePath)
             self.templates.append(template)
 
-        self.templateSize = [21, 27]
-
-        self.x_positions = [66, 84, 108, 126, 150, 168, 186]
 
     def getIGT(self):
-        break_flag = False
-        while not self.client.minecraft.stopMain_Flag:
+        templateSize = [21, 27]
+        xPositions = [66, 84, 108, 126, 150, 168, 186]
+
+        breakFlag = False
+        while not self.client.minecraft.stopMainFlag:
             time.sleep(1/2)
 
             with self.client.minecraft.lock:
-                large_image = self.client.minecraft.frame
+                frame = self.client.minecraft.frame
 
-            if large_image is None:
+            if frame is None:
                 continue
 
-            # cv2.imshow("camCapture", large_image)
+            # cv2.imshow("camCapture", frame)
             # cv2.waitKey(1)
 
-            large_image = large_image[81:108, 1683:1890]
+            frame = frame[81:108, 1683:1890]
 
-            n = []
+            numbers = []
             for i in range(7):
-                window_x = self.x_positions[i]
-                window_y = 0
+                windowX = xPositions[i]
+                windowY = 0
 
-                window = large_image[window_y:window_y + self.templateSize[1], window_x:window_x + self.templateSize[0]]
+                window = frame[windowY:windowY + templateSize[1], windowX:windowX + templateSize[0]]
 
-                best_match_val = 0
-                best_match_idx = None
+                bestMatchVal = 0
+                bestMatchIndex = None
 
                 for j, template in enumerate(self.templates):
                     result = cv2.matchTemplate(window, template, cv2.TM_CCOEFF_NORMED)
-                    _, max_val, _, _ = cv2.minMaxLoc(result)
+                    _, maxVal, _, _ = cv2.minMaxLoc(result)
 
-                    if max_val >= 0.5:
-                        if max_val > best_match_val:
-                            best_match_val = max_val
-                            best_match_idx = j
+                    if maxVal >= 0.5:
+                        if maxVal > bestMatchVal:
+                            bestMatchVal = maxVal
+                            bestMatchIndex = j
 
-                if best_match_idx is None:
-                    break_flag = True
+                if bestMatchIndex is None:
+                    breakFlag = True
                     break
 
-                n.append(best_match_idx)
+                numbers.append(bestMatchIndex)
 
-            if break_flag:
-                break_flag = False
+            if breakFlag:
+                breakFlag = False
                 continue
 
-            self.timeIGT = f"{n[0]}{n[1]}:{n[2]}{n[3]}.{n[4]}{n[5]}{n[6]}"
+            minute = numbers[0] * 10 + numbers[1]
+            second = numbers[2] * 10 + numbers[3]
+            millisecond = numbers[4] * 100 + numbers[5] * 10 + numbers[6]
+            self.timeIGT = datetime.time(minute=minute, second=second, microsecond=millisecond * 1000)
 
 
 class Biome():
@@ -95,8 +97,6 @@ class Biome():
 
         self.biomeID = "unknown"
 
-        pytesseract.pytesseract.tesseract_cmd = "C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
-
         self.biomeTemplate = cv2.imread("./assets/images/minecraft/Biome.png")
 
         with open("./assets/dictionaries/minecraft/biomes.json", "r", encoding="utf-8") as biomeJson:
@@ -104,57 +104,60 @@ class Biome():
             biomeData = json.loads(biomeStr)
             biomeData["biome_text"][None] = None
 
-            self.biome_ids = biomeData["biome_ids"]
+            self.biomeIDs = biomeData["biome_ids"]
             self.biomeText = biomeData["biome_text"]
 
-    def get_closest_match(self, target_string):
-        max_similarity = 0.0
-        closest_match = None
+        self.biomeImages = []
+        for biomeID in self.biomeIDs:
+            image = cv2.imread(f"./assets/images/minecraft/Biomes/{biomeID}.png")
+            self.biomeImages.append(image)
 
-        for minecraftID in self.biome_ids:
-            similarity = difflib.SequenceMatcher(None, target_string, minecraftID).ratio()
 
-            if similarity >= 0.5:
-                if similarity > max_similarity:
-                    max_similarity = similarity
-                    closest_match = minecraftID
-
-        return closest_match
-
-    def check_biome_visible(self, large_image):
-        biomeText = large_image[488:516, 0:83]
+    def check_biome_visible(self, frame):
+        biomeText = frame[488:516, 0:83]
 
         result = cv2.matchTemplate(biomeText, self.biomeTemplate, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, _ = cv2.minMaxLoc(result)
+        _, maxVal, _, _ = cv2.minMaxLoc(result)
 
-        return max_val >= 0.5
+        return maxVal >= 0.5
 
     def getBiome(self):
-        while not self.client.minecraft.stopMain_Flag:
+        while not self.client.minecraft.stopMainFlag:
             time.sleep(1/5)
         
             with self.client.minecraft.lock:
-                large_image = self.client.minecraft.frame
+                frame = self.client.minecraft.frame
 
-            if large_image is None:
+            if frame is None:
                 continue
 
-            isVisible = self.check_biome_visible(large_image)
+            isVisible = self.check_biome_visible(frame)
 
             if isVisible:
-                # cv2.imshow("camCapture", large_image)
+                # cv2.imshow("camCapture", frame)
                 # cv2.waitKey(1)
 
-                biomeID = large_image[488:516, 248:650]
+                yStart = 489
+                xStart = 249
 
-                biomeID = pytesseract.image_to_string(biomeID, lang="eng", config='--psm 7')
-                biomeID = biomeID.replace("\n", "")
-                biomeID = self.get_closest_match(biomeID)
+                bestMatchVal = 0
+                bestMatchIndex = None
 
-                if biomeID is None:
+                for j, template in enumerate(self.biomeImages):
+                    biomeID = frame[yStart:yStart+template.shape[0], xStart:xStart+template.shape[1]]
+
+                    result = cv2.matchTemplate(biomeID, template, cv2.TM_CCOEFF_NORMED)
+                    _, maxVal, _, maxLoc = cv2.minMaxLoc(result)
+
+                    if maxVal >= 0.5 and maxLoc[0] == 0:
+                        if maxVal > bestMatchVal:
+                            bestMatchVal = maxVal
+                            bestMatchIndex = j
+                
+                if bestMatchIndex is None:
                     continue
 
-                self.biomeID = biomeID
+                self.biomeID = self.biomeIDs[bestMatchIndex]
 
 
 class Achievement():
@@ -172,8 +175,8 @@ class Achievement():
 
         self.templates = []
         for phase in self.achievementPhases:
-            template_path = f'./assets/images/minecraft/{phase}.png'
-            template = cv2.imread(template_path)
+            templatePath = f'./assets/images/minecraft/{phase}.png'
+            template = cv2.imread(templatePath)
             self.templates.append(template)
 
     def check_priority_phase(self, achievementMatches):
@@ -205,26 +208,26 @@ class Achievement():
         return self.phase[-1]
 
     def getAchievement(self):
-        while not self.client.minecraft.stopMain_Flag:
+        while not self.client.minecraft.stopMainFlag:
             time.sleep(1/5)
 
             with self.client.minecraft.lock:
-                large_image = self.client.minecraft.frame
+                frame = self.client.minecraft.frame
 
-            if large_image is None:
+            if frame is None:
                 continue
 
-            # cv2.imshow("camCapture", large_image)
+            # cv2.imshow("camCapture", frame)
             # cv2.waitKey(1)
 
-            achievement = large_image[882:960, 461:927]
+            achievement = frame[882:960, 461:927]
 
             achievementMatches = []
             for j, template in enumerate(self.templates):
                 result = cv2.matchTemplate(achievement, template, cv2.TM_CCOEFF_NORMED)
-                _, max_val, _, _ = cv2.minMaxLoc(result)
+                _, maxVal, _, _ = cv2.minMaxLoc(result)
 
-                if max_val >= 0.5:
+                if maxVal >= 0.5:
                     achievementMatches.append(self.achievementPhases[j])
 
             if not achievementMatches:
@@ -244,80 +247,80 @@ class Coordinates():
 
         self.templates = []
         for i in range(10):
-            template_path = f'./assets/images/minecraft/Coordinates/{i}.png'
-            template = cv2.imread(template_path)
+            templatePath = f'./assets/images/minecraft/Coordinates/{i}.png'
+            template = cv2.imread(templatePath)
             self.templates.append(template)
 
         self.templates.append(cv2.imread("./assets/images/minecraft/Coordinates/minus.png"))
 
-    def check_block_visible(self, large_image):
-        blockText = large_image[303:324, 6:81]
+    def check_block_visible(self, frame):
+        blockText = frame[303:324, 6:81]
 
         result = cv2.matchTemplate(blockText, self.blockTemplate, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, _ = cv2.minMaxLoc(result)
+        _, maxVal, _, _ = cv2.minMaxLoc(result)
 
-        return max_val >= 0.5
+        return maxVal >= 0.5
 
     def getCoords(self):
-        while not self.client.minecraft.stopMain_Flag:
+        while not self.client.minecraft.stopMainFlag:
             time.sleep(1/5)
         
             with self.client.minecraft.lock:
-                large_image = self.client.minecraft.frame
+                frame = self.client.minecraft.frame
 
-            if large_image is None:
+            if frame is None:
                 continue
 
-            isVisible = self.check_block_visible(large_image)
+            isVisible = self.check_block_visible(frame)
 
             if isVisible:
-                coords = large_image[302:325, 101:385]
+                coords = frame[302:325, 101:385]
 
-                lower_bound = np.array([170, 170, 170], dtype=np.uint8)
-                upper_bound = np.array([255, 255, 255], dtype=np.uint8)
-                mask = cv2.inRange(coords, lower_bound, upper_bound)
+                lowerBound = np.array([170, 170, 170], dtype=np.uint8)
+                upperBound = np.array([255, 255, 255], dtype=np.uint8)
+                mask = cv2.inRange(coords, lowerBound, upperBound)
                 coords = cv2.bitwise_and(coords, coords, mask=mask)
 
-                n = []
+                numbers = []
                 for i, template in enumerate(self.templates):
                     result = cv2.matchTemplate(coords, template, cv2.TM_CCOEFF_NORMED)
                     threshold = 0.8
                     locations = np.where(result >= threshold)
 
                     for [x, y] in zip(*locations[::-1]):
-                        max_val = result[(x, y)[::-1]]
+                        maxVal = result[(x, y)[::-1]]
 
                         if x % 18 != 0 and (x+30) % 18 != 0 and (x+60) % 18 != 0:
                             continue
 
-                        to_remove = []
+                        toRemove = []
                         isSame = False
-                        for tup in n:
+                        for tup in numbers:
                             if x == tup[0]:
                                 isSame = True
-                                if max_val > tup[2]:
-                                    to_remove.append(tup)
+                                if maxVal > tup[2]:
+                                    toRemove.append(tup)
                                 
 
-                        n = [tup for tup in n if tup not in to_remove]
+                        numbers = [tup for tup in numbers if tup not in toRemove]
 
-                        if not to_remove and isSame:
+                        if not toRemove and isSame:
                             continue
 
                         if i == 10:
-                            n.append((x, "-", max_val))
+                            numbers.append((x, "-", maxVal))
                         if i != 10:
-                            n.append((x, i, max_val))
+                            numbers.append((x, i, maxVal))
 
-                if not n:
+                if not numbers:
                     continue
 
-                sorted_n = sorted(n, key=lambda x: x[0])
+                sortedNumbers = sorted(numbers, key=lambda x: x[0])
 
                 coordString = ""
                 jump = 0
                 coords = []
-                for i, [x, number, _] in enumerate(sorted_n):
+                for i, [x, number, _] in enumerate(sortedNumbers):
                     if (x-jump) % 18 != 0:
                         try:
                             coords.append(int(coordString))
@@ -332,27 +335,25 @@ class Coordinates():
                 try:
                     coords.append(int(coordString))
                     self.coordsList.append(coords)
-                    n = np.array(self.coordsList)
+                    numbers = np.array(self.coordsList)
                 except Exception as e:
                     print(e)
                     continue
-                diffs = np.diff(n, axis=0)
+                diffs = np.diff(numbers, axis=0)
                 threshold = 10
                 distances = np.linalg.norm(diffs, axis=1)
 
-                outlier_indices = []
+                outlierIndices = []
                 for i, distance in enumerate(distances[-2:]):
                     if distances[-2:][i-1] > threshold and distance > threshold:
-                        outlier_indices.append(i-1)
+                        outlierIndices.append(i-1)
 
-                for row in outlier_indices:
-                    # print(f"REMOVED: {self.coordsList[-2:][row]}")
+                for row in outlierIndices:
                     self.coordsList.pop(len(self.coordsList)-2+row)
                     if self.achievementCheck[-1][1] >= 0:
                         self.achievementCheck[-1][1] -= 1
 
                 if len(self.coordsList) >= 2:
-                    # print(f"{self.coordsList[-2:][0][0]} {self.coordsList[-2:][0][1]} {self.coordsList[-2:][0][2]}")
                     try:
                         if len(self.achievementCheck) > 0 and len(self.achievementCheck[-1]) < 3:
                             if self.achievementCheck[-1][1] == 1:
@@ -379,35 +380,35 @@ class Coordinates():
 
 #         self.itemTemplates = []
 #         for item in self.inventoryItems:
-#             template_path = f'./assets/images/minecraft/InventoryIcons/{item}.png'
-#             template = cv2.imread(template_path)
+#             templatePath = f'./assets/images/minecraft/InventoryIcons/{item}.png'
+#             template = cv2.imread(templatePath)
 #             self.itemTemplates.append(template)
 
-#     def check_inventory_visible(self, large_image):
-#         crafting = large_image[309:333, 987:1107]
+#     def check_inventory_visible(self, frame):
+#         crafting = frame[309:333, 987:1107]
 
 #         # cv2.imshow("camCapture", crafting)
 #         # cv2.waitKey(1)
 
 #         result = cv2.matchTemplate(crafting, self.craftingTemplate, cv2.TM_CCOEFF_NORMED)
-#         _, max_val, _, _ = cv2.minMaxLoc(result)
+#         _, maxVal, _, _ = cv2.minMaxLoc(result)
 
-#         return max_val >= 0.5
+#         return maxVal >= 0.5
 
 #     def getInventory(self):
-#         while not self.client.minecraft.stopMain_Flag:
+#         while not self.client.minecraft.stopMainFlag:
 #             time.sleep(1/20)
 
 #             with self.client.minecraft.lock:
-#                 large_image = self.client.minecraft.frame
+#                 frame = self.client.minecraft.frame
 
-#             if large_image is None:
+#             if frame is None:
 #                 continue
 
-#             # cv2.imshow("camCapture", large_image)
+#             # cv2.imshow("camCapture", frame)
 #             # cv2.waitKey(1)
 
-#             isVisible = self.check_inventory_visible(large_image)
+#             isVisible = self.check_inventory_visible(frame)
 
 #             if isVisible:
 #                 print("Visible")
@@ -415,16 +416,16 @@ class Coordinates():
 #                 xStart = 3
 #                 yStart = 3
 
-#                 inventory = large_image[540:768, 717:1203]
+#                 inventory = frame[540:768, 717:1203]
 
 #                 for i in range(9*4):
 #                     item = inventory[yStart:yStart+27, xStart:xStart+48]
 
 #                     for itemTemplate in self.itemTemplates:
 #                         result = cv2.matchTemplate(item, itemTemplate, cv2.TM_CCOEFF_NORMED)
-#                         _, max_val, _, _ = cv2.minMaxLoc(result)
+#                         _, maxVal, _, _ = cv2.minMaxLoc(result)
 
-#                         if max_val >= 0.95:
+#                         if maxVal >= 0.95:
 #                             cv2.imshow("camCapture", item)
 #                             cv2.waitKey(0)
 
@@ -449,13 +450,13 @@ class Other():
                                ("Died", (504, 528, 855, 1062), 0.3), ("Spectator", (555, 576, 879, 1038), 0.4))
         self.templates = []
         for templateText, _, _ in self.otherTemplates:
-            template_path = f'./assets/images/minecraft/{templateText}.png'
-            template = cv2.imread(template_path)
+            templatePath = f'./assets/images/minecraft/{templateText}.png'
+            template = cv2.imread(templatePath)
             self.templates.append(template)
 
         self.resultTemplate = None
-        self.deathCounter = 6
-        self.generatingCounter = 328
+        self.deathCounter = 0
+        self.generatingCounter = 0
         self.isSpectator = False
 
     def loading(self):
@@ -471,7 +472,7 @@ class Other():
 
     def generating(self):
         self.generatingCounter += 1
-        self.client.minecraft.igt.timeIGT = "00:00.000"
+        self.client.minecraft.igt.timeIGT = datetime.time(minute=0, second=0, microsecond=0)
         self.client.minecraft.biome.biomeID = "unknown"
         self.client.minecraft.achievement.phase = ["Start"]
         self.client.minecraft.coordinates.coordsList = []
@@ -486,27 +487,27 @@ class Other():
         self.isSpectator = True
 
     def getOthers(self):
-        while not self.client.minecraft.stopMain_Flag:
+        while not self.client.minecraft.stopMainFlag:
             time.sleep(1/30)
 
             with self.client.minecraft.lock:
-                large_image = self.client.minecraft.frame
+                frame = self.client.minecraft.frame
 
-            if large_image is None:
+            if frame is None:
                 continue
 
-            # cv2.imshow("camCapture", large_image)
+            # cv2.imshow("camCapture", frame)
             # cv2.waitKey(1)
 
             newResultTemplate = None
             for j, template in enumerate(self.templates):
                 otherTemplate = self.otherTemplates[j][1]
-                otherTemplate = large_image[otherTemplate[0]:otherTemplate[1], otherTemplate[2]:otherTemplate[3]]
+                otherTemplate = frame[otherTemplate[0]:otherTemplate[1], otherTemplate[2]:otherTemplate[3]]
 
                 result = cv2.matchTemplate(otherTemplate, template, cv2.TM_CCOEFF_NORMED)
-                _, max_val, _, _ = cv2.minMaxLoc(result)
+                _, maxVal, _, _ = cv2.minMaxLoc(result)
 
-                if max_val >= self.otherTemplates[j][2]:
+                if maxVal >= self.otherTemplates[j][2]:
                     newResultTemplate = self.otherTemplates[j][0]
                     break
 
@@ -526,14 +527,12 @@ class Other():
                     case "Spectator":
                         self.spectator()
 
-                # print(newResultTemplate)
-
 
 class Minecraft_Commands(commands.Cog):
     def __init__(self, client: default.DiscordBot):
         self.client = client
         self.frame = None
-        self.stopMain_Flag = False
+        self.stopMainFlag = False
 
         self.lock = threading.Lock()
         self.igt = IGT(self.client)
@@ -545,84 +544,77 @@ class Minecraft_Commands(commands.Cog):
 
         self.client.minecraft = self
 
-    async def twitchAuth(self):
-        target_scope = [AuthScope.BITS_READ]
-        self.twitch = await Twitch(os.environ["TWITCH_TEST_ID"], os.environ["TWITCH_TEST_SECRET"])
-        self.auth = UserAuthenticator(self.twitch, target_scope, force_verify=False)
-        token, refresh_token = await self.auth.authenticate()
-        await self.twitch.set_user_authentication(token, target_scope, refresh_token)
+    def timeToString(self, timeIGT):
+        formattedIGT = timeIGT.strftime("%M:%S.%f")
+        return formattedIGT[:-3]
 
     @commands.hybrid_command(aliases=["m"], description="Forsen's Minecraft Status")
     async def minecraft(self, ctx: commands.Context):
-        # twitch = self.client.twitch
-        # if twitch.isIntro is False and twitch.onlineCheck is True and twitch.game == "Minecraft":
-        embed = discord.Embed(title="Forsen's Minecraft Status", description=None, color=0x000000, timestamp=ctx.message.created_at)
-        embed.add_field(name="Ingame Time:", value=self.igt.timeIGT, inline=True)
-        embed.add_field(name="Biome:", value=self.biome.biomeText[self.biome.biomeID], inline=True)
-        embed.add_field(name="Phase:", value=self.achievement.numberStructute(), inline=True)
-        embed.add_field(name="Seeds:", value=self.other.generatingCounter, inline=True)
-        embed.add_field(name="Deaths:", value=self.other.deathCounter, inline=True)
-        embed.set_thumbnail(url="https://cdn.discordapp.com/attachments/988994875234082829/1139301216459964436/3x.gif")
-        embed.set_author(name=ctx.author, icon_url=ctx.author.display_avatar.url)
-        embed.set_footer(text="Bot made by Tuxsuper", icon_url=self.client.DEV.display_avatar.url)
-        await ctx.send(embed=embed)
+        twitch = self.client.twitch
+        if twitch.isIntro is False and twitch.isOnline is True and twitch.game == "Minecraft":
+            embed = discord.Embed(title="Forsen's Minecraft Status", description=None, color=0x000000, timestamp=ctx.message.created_at)
+            embed.add_field(name="Ingame Time:", value=self.timeToString(self.igt.timeIGT), inline=True)
+            embed.add_field(name="Biome:", value=self.biome.biomeText[self.biome.biomeID], inline=True)
+            embed.add_field(name="Phase:", value=self.achievement.numberStructute(), inline=True)
+            embed.add_field(name="Seeds:", value=self.other.generatingCounter, inline=True)
+            embed.add_field(name="Deaths:", value=self.other.deathCounter, inline=True)
+            embed.set_thumbnail(url="https://cdn.discordapp.com/attachments/988994875234082829/1139301216459964436/3x.gif")
+            embed.set_author(name=ctx.author, icon_url=ctx.author.display_avatar.url)
+            embed.set_footer(text="Bot made by Tuxsuper", icon_url=self.client.DEV.display_avatar.url)
+            await ctx.send(embed=embed)
 
     @commands.hybrid_command(aliases=["c"], description="Forsen's Minecraft Coords")
     @commands.cooldown(1, 10, commands.BucketType.channel)
     async def coords(self, ctx: commands.Context):
-        if len(self.coordinates.coordsList) >= 2:
+        twitch = self.client.twitch
+        if twitch.isIntro is False and twitch.isOnline is True and twitch.game == "Minecraft":
+            if len(self.coordinates.coordsList) >= 2:
+                x_values = [coord[0] for coord in self.coordinates.coordsList[:-2]]
+                z_values = [coord[2] for coord in self.coordinates.coordsList[:-2]]
 
-            x_values = [coord[0] for coord in self.coordinates.coordsList[:-2]]
-            z_values = [coord[2] for coord in self.coordinates.coordsList[:-2]]
+                plt.plot(x_values, z_values, color='black')
 
-            plt.plot(x_values, z_values, color='black')
+                plt.xlim(max(x_values)+25, min(x_values)-25)
+                plt.ylim(min(z_values)-25, max(z_values)+25)
 
-            plt.xlim(max(x_values)+25, min(x_values)-25)
-            plt.ylim(min(z_values)-25, max(z_values)+25)
+                img = plt.imread("./assets/images/minecraft/forsenE.png")
+                imagebox = OffsetImage(img, zoom=0.1)
+                ab = AnnotationBbox(imagebox, (self.coordinates.coordsList[-2:][0][0], self.coordinates.coordsList[-2:][0][2]), frameon=False)
+                plt.gca().add_artist(ab)
 
-            img = plt.imread("./assets/images/minecraft/forsenE.png")
-            imagebox = OffsetImage(img, zoom=0.1)
-            ab = AnnotationBbox(imagebox, (self.coordinates.coordsList[-2:][0][0], self.coordinates.coordsList[-2:][0][2]), frameon=False)
-            plt.gca().add_artist(ab)
+                for phaseCoords in self.coordinates.achievementCheck:
+                    phase = phaseCoords[0]
+                    check = phaseCoords[1]
 
-            for phaseCoords in self.coordinates.achievementCheck:
-                phase = phaseCoords[0]
-                check = phaseCoords[1]
+                    if check != -1:
+                        continue
+                    if len(phaseCoords) < 3:
+                        continue
 
-                if check != -1:
-                    continue
-                if len(phaseCoords) < 3:
-                    continue
+                    coords = phaseCoords[2]
 
-                coords = phaseCoords[2]
+                    plt.scatter(coords[0], coords[2], s=100, zorder=2)
+                    plt.annotate(phase, (coords[0], coords[2]), textcoords="offset points", xytext=(0,15), ha='center', fontsize=12)
 
-                plt.scatter(coords[0], coords[2], s=100, zorder=2)
-                plt.annotate(phase, (coords[0], coords[2]), textcoords="offset points", xytext=(0,15), ha='center', fontsize=12)
+            plt.xlabel('X Coordinate')
+            plt.ylabel('Z Coordinate')
+            plt.title('Forsen Coordinates')
 
-            # plt.scatter(self.coordinates.coordsList[-2:][0][0], self.coordinates.coordsList[-2:][0][2], marker=(imagebox, 0), s=50, zorder=2)
-            # plt.annotate("Forsen", (self.coordinates.coordsList[-2:][0][0], self.coordinates.coordsList[-2:][0][2]), textcoords="offset points", xytext=(0,15), ha='center', fontsize=10)
+            filename = "coordinates.png"
+            plt.savefig(filename)
+            image = discord.File(filename)
 
-        plt.xlabel('X Coordinate')
-        plt.ylabel('Z Coordinate')
-        plt.title('Forsen Coordinates')
+            await ctx.send(file = image)
 
-        filename = "coordinates.png"
-        plt.savefig(filename)
-        image = discord.File(filename)
-
-        await ctx.send(file = image)
-
-        plt.close()
+            plt.close()
 
     async def startMain(self):
-        await self.twitchAuth()
-
         main_thread = threading.Thread(target=self.main)
         main_thread.start()
         self.main_thread = main_thread
 
     async def stopMain(self):
-        self.stopMain_Flag = True
+        self.stopMainFlag = True
         self.main_thread.join()
 
     def main(self):
@@ -632,7 +624,7 @@ class Minecraft_Commands(commands.Cog):
         options = Options()
         options.set("low-latency", True)
         options.set("disable-ads", True)
-        options.set("api-header", {"Authorization": self.twitch.get_user_auth_token()})
+        options.set("api-header", {"Authorization": self.client.twitch.get_user_auth_token()})
 
         plugin = pluginclass(session, resolved_url, options)
 
@@ -664,7 +656,7 @@ class Minecraft_Commands(commands.Cog):
         other_thread = threading.Thread(target=self.other.getOthers)
         other_thread.start()
 
-        while not self.stopMain_Flag:
+        while not self.stopMainFlag:
             try:
                 ret, frame = cap.read()
                 if not ret:

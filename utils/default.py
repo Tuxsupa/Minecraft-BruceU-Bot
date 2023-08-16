@@ -17,6 +17,7 @@ class DiscordBot(Bot):
         self.loop = loop
         self.isTest = isTest
         self.minecraft = None
+        self.twitch = None
 
     async def setup_hook(self):
         for file in os.listdir("cogs"):
@@ -26,7 +27,7 @@ class DiscordBot(Bot):
 
         self.DEV = await self.fetch_user(os.environ["OWNER_ID"])
 
-        await self.minecraft.startMain()
+        # await self.minecraft.startMain()
 
         await self.tree.sync()
 
