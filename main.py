@@ -1,8 +1,6 @@
 import os
-#import logging
 import asyncio
 import discord
-# import yappi
 
 from dotenv import load_dotenv
 
@@ -23,11 +21,8 @@ def main():
         command_prefix="$", help_command=None, case_insensitive=True, intents=intent, loop=loop, isTest = isTest
     )
 
-    if isTest is False:
-        TOKEN = os.environ["BOT_TOKEN"]
-    else:
-        TOKEN = os.environ["BOT_TEST_TOKEN"]
-
+    TOKEN = os.environ["BOT_TEST_TOKEN"] if isTest else os.environ["BOT_TOKEN"]
+    
     # try:
     #     loop.run_until_complete(client.start(TOKEN))
     # finally:

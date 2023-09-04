@@ -6,8 +6,10 @@ from discord.ext.commands import Bot
 from discord.ext import commands
 
 from dotenv import load_dotenv
+from quart import Quart
 
 load_dotenv()
+app = Quart(__name__)
 
 
 class DiscordBot(Bot):
@@ -17,9 +19,20 @@ class DiscordBot(Bot):
         self.loop = loop
         self.isTest = isTest
         self.minecraft = None
-        self.twitch = None
+
+        self.app = app
+        self.app.config['CLIENT'] = self
+
+    async def run_quart_app(self):
+        await self.app.run_task(host='0.0.0.0', port=8081)
+
+    async def start_quart(self):
+        self.loop.create_task(self.run_quart_app())
+        print('Quart app is starting!')
 
     async def setup_hook(self):
+        await self.start_quart()
+               
         for file in os.listdir("cogs"):
             if file.endswith(".py"):
                 name = file[:-3]
@@ -27,21 +40,30 @@ class DiscordBot(Bot):
 
         self.DEV = await self.fetch_user(os.environ["OWNER_ID"])
 
+        from utils import twitchAPI
+        self.twitchAPI = twitchAPI.TwitchAPI(client=self, loop=self.loop)
+        self.app.config['TWITCH_API'] = self.twitchAPI
+
+        self.loop.create_task(self.twitchAPI.main())
+
         # await self.minecraft.startMain()
 
         await self.tree.sync()
 
     async def on_command_error(self, message, error):
-        if isinstance(error, commands.MissingRole):
-            await embedMessage(client=self, ctx=message, description=error)
-        elif isinstance(error, commands.BadArgument):
-            await embedMessage(client=self, ctx=message, description=error)
-        elif isinstance(error, commands.MissingRequiredArgument):
+        if isinstance(
+            error,
+            (
+                commands.MissingRole,
+                commands.BadArgument,
+                commands.MissingRequiredArgument,
+            ),
+        ):
             await embedMessage(client=self, ctx=message, description=error)
         elif isinstance(error, commands.CommandInvokeError):
             error = error.original
             if isinstance(error, discord.errors.Forbidden):
-                await embedMessage(client=self, ctx=message, description="Error " + error)
+                await embedMessage(client=self, ctx=message, description=f"Error {error}")
 
 
 async def embedMessage(client: DiscordBot, ctx: commands.Context, title: str = None, description: str = None):

@@ -1,8 +1,9 @@
-import asyncio
 import os
+import asyncio
 
 import discord
 
+from quart import redirect, request
 from dotenv import load_dotenv
 from utils import default
 
@@ -11,8 +12,17 @@ from twitchAPI.oauth import UserAuthenticator
 from twitchAPI.types import AuthScope
 from twitchAPI.helper import first
 from twitchAPI.eventsub import EventSub
+#from pyngrok import ngrok
 
 load_dotenv()
+
+@default.app.route('/login')
+async def login():
+    return await default.app.config['TWITCH_API'].handle_login()
+
+@default.app.route('/login/callback')
+async def login_callback():
+    return await default.app.config['TWITCH_API'].handle_login_callback()
 
 
 class TwitchAPI():
@@ -21,32 +31,41 @@ class TwitchAPI():
         self.loop = loop
         self.isIntro = False
 
-        self.client.twitch = self
+    async def handle_login(self):
+        url = self.auth.return_auth_url()
+        return redirect(url)
 
-    async def main(self):        
+    async def handle_login_callback(self):
+        code = request.args.get('code')
+        token, refresh_token = await self.auth.authenticate(user_token=code)
+        await self.TWITCH.set_user_authentication(token, self.target_scope, refresh_token)
+        
+        await self.client.minecraft.startStreamlink()
+
+        return redirect('/')
+
+    async def main(self):
         self.TWITCH = await Twitch(os.environ["TWITCH_TEST_ID"], os.environ["TWITCH_TEST_SECRET"])
-        target_scope = [AuthScope.BITS_READ]
-        self.auth = UserAuthenticator(self.TWITCH, target_scope, force_verify=False)
-        token, refresh_token = await self.auth.authenticate()
-        await self.TWITCH.set_user_authentication(token, target_scope, refresh_token)
+        self.target_scope = [AuthScope.BITS_READ]
+        self.auth = UserAuthenticator(self.TWITCH, self.target_scope, force_verify=False, url=f"{os.environ['APIHOST']}/login/callback")
 
         self.user = await first(self.TWITCH.get_users(logins="forsen"))
         self.stream = await first(self.TWITCH.get_streams(user_id=[self.user.id]))
         self.channel = await self.TWITCH.get_channel_information(self.user.id)
 
-        if self.stream is not None:
-            self.isOnline = True
-        else:
-            self.isOnline = False
-
+        self.isOnline = self.stream is not None
         self.game = self.channel[0].game_name
 
         print(f"Online: {self.isOnline}")
         print(f"Channel name: {self.user.display_name}")
         print(f"Channel game: {self.game}")
 
-        if self.game == "Minecraft":
+        if self.isOnline and self.game == "Minecraft":
             await self.client.minecraft.startMain()
+
+        # http_tunnel = ngrok.connect(8080, bind_tls=True)
+        # event_sub = EventSub(http_tunnel.public_url, os.environ["TWITCH_TEST_ID"], 8080, self.TWITCH)
+        # event_sub.wait_for_subscription_confirm = False
 
         event_sub = EventSub(os.environ["HOST"], os.environ["TWITCH_TEST_ID"], 8080, self.TWITCH)
         event_sub.wait_for_subscription_confirm = False
@@ -88,7 +107,7 @@ class TwitchAPI():
             if data["event"]["category_name"] == "Minecraft":
                 await self.client.minecraft.startMain()
         else:
-            await self.onlineCheck(data)
+            await self.onlineCheck()
 
         self.game = data["event"]["category_name"]
 
@@ -97,7 +116,7 @@ class TwitchAPI():
 
         if self.isOnline is False:
             print("Went live without changing the title")
-            await self.onlineCheck(data)
+            await self.onlineCheck()
 
         self.onlineEvent_checked = True
 

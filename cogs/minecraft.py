@@ -1,4 +1,4 @@
-import os
+import asyncio
 import time
 import datetime
 import threading
@@ -15,10 +15,6 @@ from streamlink.options import Options
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 from dotenv import load_dotenv
 from utils import default
-
-from twitchAPI.twitch import Twitch
-from twitchAPI.oauth import UserAuthenticator
-from twitchAPI.types import AuthScope
 
 load_dotenv()
 plt.switch_backend('agg')
@@ -70,10 +66,9 @@ class IGT():
                     result = cv2.matchTemplate(window, template, cv2.TM_CCOEFF_NORMED)
                     _, maxVal, _, _ = cv2.minMaxLoc(result)
 
-                    if maxVal >= 0.5:
-                        if maxVal > bestMatchVal:
-                            bestMatchVal = maxVal
-                            bestMatchIndex = j
+                    if maxVal >= 0.5 and maxVal > bestMatchVal:
+                        bestMatchVal = maxVal
+                        bestMatchIndex = j
 
                 if bestMatchIndex is None:
                     breakFlag = True
@@ -124,16 +119,14 @@ class Biome():
     def getBiome(self):
         while not self.client.minecraft.stopMainFlag:
             time.sleep(1/5)
-        
+
             with self.client.minecraft.lock:
                 frame = self.client.minecraft.frame
 
             if frame is None:
                 continue
 
-            isVisible = self.check_biome_visible(frame)
-
-            if isVisible:
+            if self.check_biome_visible(frame):
                 # cv2.imshow("camCapture", frame)
                 # cv2.waitKey(1)
 
@@ -149,11 +142,10 @@ class Biome():
                     result = cv2.matchTemplate(biomeID, template, cv2.TM_CCOEFF_NORMED)
                     _, maxVal, _, maxLoc = cv2.minMaxLoc(result)
 
-                    if maxVal >= 0.5 and maxLoc[0] == 0:
-                        if maxVal > bestMatchVal:
-                            bestMatchVal = maxVal
-                            bestMatchIndex = j
-                
+                    if maxVal >= 0.5 and maxLoc[0] == 0 and maxVal > bestMatchVal:
+                        bestMatchVal = maxVal
+                        bestMatchIndex = j
+
                 if bestMatchIndex is None:
                     continue
 
@@ -193,10 +185,9 @@ class Achievement():
                 self.client.loop.create_task(self.pingStronghold(match, oldPhase))
 
     async def pingStronghold(self, phase, oldPhase):
-        if not self.client.isTest:
-            if phase != oldPhase and phase == "Stronghold":
-                discordChannel = await self.client.fetch_channel(1052307685414027264)
-                await discordChannel.send(content="<@&1137857293363449866> THE RUN")
+        if not self.client.isTest and (phase != oldPhase and phase == "Stronghold"):
+            discordChannel = await self.client.fetch_channel(1052307685414027264)
+            await discordChannel.send(content="<@&1137857293363449866> THE RUN")
 
     def numberStructute(self):
         if self.phase[-1] in ("Bastion", "Fortress"):
@@ -240,7 +231,7 @@ class Coordinates():
     def __init__(self, client: default.DiscordBot):
         self.client = client
         self.coordsList = []
-        self.achievementCheck = [["Start", 0]]
+        self.achievementCheck = [["Start", 0]] # [[phase, number_check_trueCoord]
         self.all_achievementCheck = self.achievementCheck
 
         self.blockTemplate = cv2.imread("./assets/images/minecraft/Coordinates/Block.png")
@@ -260,20 +251,110 @@ class Coordinates():
         _, maxVal, _, _ = cv2.minMaxLoc(result)
 
         return maxVal >= 0.5
+    
+    def get_coord_numbers(self, coords):
+        numbers = []
+        for i, template in enumerate(self.templates):
+            result = cv2.matchTemplate(coords, template, cv2.TM_CCOEFF_NORMED)
+            threshold = 0.8
+            locations = np.where(result >= threshold)
+
+            for [x, y] in zip(*locations[::-1]):
+                maxVal = result[(x, y)[::-1]]
+
+                if x % 18 != 0 and (x+30) % 18 != 0 and (x+60) % 18 != 0:
+                    continue
+
+                toRemove = []
+                isSame = False
+                for tup in numbers:
+                    if x == tup[0]:
+                        isSame = True
+                        if maxVal > tup[2]:
+                            toRemove.append(tup)
+
+
+                numbers = [tup for tup in numbers if tup not in toRemove]
+
+                if not toRemove and isSame:
+                    continue
+
+                if i == 10:
+                    numbers.append((x, "-", maxVal))
+                else:
+                    numbers.append((x, i, maxVal))
+                    
+        return numbers
+    
+    def append_coord_numbers(self, numbers):
+        sortedNumbers = sorted(numbers, key=lambda x: x[0])
+
+        coordString = ""
+        jump = 0
+        coords = []
+        for i, [x, number, _] in enumerate(sortedNumbers):
+            if (x-jump) % 18 != 0:
+                try:
+                    coords.append(int(coordString))
+                except ValueError:
+                    break
+                coordString = ""
+                jump += 30
+                if len(coords) >= 3:
+                    break
+
+            coordString += str(number)
+        try:
+            coords.append(int(coordString))
+            self.coordsList.append(coords)
+            numbers = np.array(self.coordsList)
+            return numbers
+        except Exception as e:
+            print(e)
+            return None
+
+    def remove_outlier_coords(self, numbers):
+        try:
+            diffs = np.diff(numbers, axis=0)
+            threshold = 10
+            distances = np.linalg.norm(diffs, axis=1)
+        except Exception as e:
+                print(e)
+
+        outlierIndices = [
+            i - 1
+            for i, distance in enumerate(distances[-2:])
+            if distances[-2:][i - 1] > threshold and distance > threshold
+        ]
+
+        for row in outlierIndices:
+            self.coordsList.pop(len(self.coordsList)-2+row)
+            if self.achievementCheck[-1][1] >= 0:
+                self.achievementCheck[-1][1] -= 1
+
+        if len(self.coordsList) >= 2:
+            try:
+                if len(self.achievementCheck) > 0 and len(self.achievementCheck[-1]) < 3:
+                    if self.achievementCheck[-1][1] == 1:
+                        self.achievementCheck[-1].append(self.coordsList[-2:][0])
+                        self.achievementCheck[-1][1] = -1
+
+                    elif self.achievementCheck[-1][1] == 0:
+                        self.achievementCheck[-1][1] += 1
+            except Exception as e:
+                print(e)
 
     def getCoords(self):
         while not self.client.minecraft.stopMainFlag:
             time.sleep(1/5)
-        
+
             with self.client.minecraft.lock:
                 frame = self.client.minecraft.frame
 
             if frame is None:
                 continue
 
-            isVisible = self.check_block_visible(frame)
-
-            if isVisible:
+            if self.check_block_visible(frame):
                 coords = frame[302:325, 101:385]
 
                 lowerBound = np.array([170, 170, 170], dtype=np.uint8)
@@ -281,89 +362,13 @@ class Coordinates():
                 mask = cv2.inRange(coords, lowerBound, upperBound)
                 coords = cv2.bitwise_and(coords, coords, mask=mask)
 
-                numbers = []
-                for i, template in enumerate(self.templates):
-                    result = cv2.matchTemplate(coords, template, cv2.TM_CCOEFF_NORMED)
-                    threshold = 0.8
-                    locations = np.where(result >= threshold)
-
-                    for [x, y] in zip(*locations[::-1]):
-                        maxVal = result[(x, y)[::-1]]
-
-                        if x % 18 != 0 and (x+30) % 18 != 0 and (x+60) % 18 != 0:
-                            continue
-
-                        toRemove = []
-                        isSame = False
-                        for tup in numbers:
-                            if x == tup[0]:
-                                isSame = True
-                                if maxVal > tup[2]:
-                                    toRemove.append(tup)
-                                
-
-                        numbers = [tup for tup in numbers if tup not in toRemove]
-
-                        if not toRemove and isSame:
-                            continue
-
-                        if i == 10:
-                            numbers.append((x, "-", maxVal))
-                        if i != 10:
-                            numbers.append((x, i, maxVal))
-
+                numbers = self.get_coord_numbers(coords)
                 if not numbers:
                     continue
 
-                sortedNumbers = sorted(numbers, key=lambda x: x[0])
-
-                coordString = ""
-                jump = 0
-                coords = []
-                for i, [x, number, _] in enumerate(sortedNumbers):
-                    if (x-jump) % 18 != 0:
-                        try:
-                            coords.append(int(coordString))
-                        except ValueError:
-                            break
-                        coordString = ""
-                        jump += 30
-                        if len(coords) >= 3:
-                            break
-
-                    coordString += str(number)
-                try:
-                    coords.append(int(coordString))
-                    self.coordsList.append(coords)
-                    numbers = np.array(self.coordsList)
-                except Exception as e:
-                    print(e)
-                    continue
-                diffs = np.diff(numbers, axis=0)
-                threshold = 10
-                distances = np.linalg.norm(diffs, axis=1)
-
-                outlierIndices = []
-                for i, distance in enumerate(distances[-2:]):
-                    if distances[-2:][i-1] > threshold and distance > threshold:
-                        outlierIndices.append(i-1)
-
-                for row in outlierIndices:
-                    self.coordsList.pop(len(self.coordsList)-2+row)
-                    if self.achievementCheck[-1][1] >= 0:
-                        self.achievementCheck[-1][1] -= 1
-
-                if len(self.coordsList) >= 2:
-                    try:
-                        if len(self.achievementCheck) > 0 and len(self.achievementCheck[-1]) < 3:
-                            if self.achievementCheck[-1][1] == 1:
-                                self.achievementCheck[-1].append(self.coordsList[-2:][0])
-                                self.achievementCheck[-1][1] = -1
-
-                            elif self.achievementCheck[-1][1] == 0:
-                                self.achievementCheck[-1][1] += 1
-                    except Exception as e:
-                        print(e)
+                numbers = self.append_coord_numbers(numbers)
+                
+                self.remove_outlier_coords(numbers)
 
 
 # class Inventory():
@@ -445,6 +450,11 @@ class Coordinates():
 class Other():
     def __init__(self, client: default.DiscordBot):
         self.client = client
+        
+        self.resultTemplate = None
+        self.deathCounter = 0
+        self.generatingCounter = 0
+        self.isSpectator = False
 
         self.otherTemplates = (("Loading", (390, 414, 771, 1056), 0.5), ("Generating", (438, 459, 942, 975), 0.85),
                                ("Died", (504, 528, 855, 1062), 0.3), ("Spectator", (555, 576, 879, 1038), 0.4))
@@ -454,15 +464,10 @@ class Other():
             template = cv2.imread(templatePath)
             self.templates.append(template)
 
-        self.resultTemplate = None
-        self.deathCounter = 0
-        self.generatingCounter = 0
-        self.isSpectator = False
-
     def loading(self):
         self.client.minecraft.coordinates.coordsList = []
         self.client.minecraft.coordinates.achievementCheck = []
-        if all(phase in self.client.minecraft.achievement.phase for phase in ["Nether", "Bastion", "Fortress"]):
+        if all(phase in self.client.minecraft.achievement.phase for phase in ["Bastion", "Fortress"]):
             if "Nether Exit" not in self.client.minecraft.achievement.phase:
                 self.client.minecraft.achievement.phase.append("Nether Exit")
                 self.client.minecraft.coordinates.achievementCheck = [["Nether Exit", 0]]
@@ -549,9 +554,11 @@ class Minecraft_Commands(commands.Cog):
         return formattedIGT[:-3]
 
     @commands.hybrid_command(aliases=["m"], description="Forsen's Minecraft Status")
+    @commands.cooldown(1, 10, commands.BucketType.channel)
+    @commands.guild_only()
     async def minecraft(self, ctx: commands.Context):
-        twitch = self.client.twitch
-        if twitch.isIntro is False and twitch.isOnline is True and twitch.game == "Minecraft":
+        twitchAPI = self.client.twitchAPI
+        if twitchAPI.isIntro is False and twitchAPI.isOnline is True and twitchAPI.game == "Minecraft":
             embed = discord.Embed(title="Forsen's Minecraft Status", description=None, color=0x000000, timestamp=ctx.message.created_at)
             embed.add_field(name="Ingame Time:", value=self.timeToString(self.igt.timeIGT), inline=True)
             embed.add_field(name="Biome:", value=self.biome.biomeText[self.biome.biomeID], inline=True)
@@ -565,17 +572,18 @@ class Minecraft_Commands(commands.Cog):
 
     @commands.hybrid_command(aliases=["c"], description="Forsen's Minecraft Coords")
     @commands.cooldown(1, 10, commands.BucketType.channel)
+    @commands.guild_only()
     async def coords(self, ctx: commands.Context):
-        twitch = self.client.twitch
-        if twitch.isIntro is False and twitch.isOnline is True and twitch.game == "Minecraft":
+        twitchAPI = self.client.twitchAPI
+        if twitchAPI.isIntro is False and twitchAPI.isOnline is True and twitchAPI.game == "Minecraft":
             if len(self.coordinates.coordsList) >= 2:
                 x_values = [coord[0] for coord in self.coordinates.coordsList[:-2]]
                 z_values = [coord[2] for coord in self.coordinates.coordsList[:-2]]
 
                 plt.plot(x_values, z_values, color='black')
 
-                plt.xlim(max(x_values)+25, min(x_values)-25)
-                plt.ylim(min(z_values)-25, max(z_values)+25)
+                plt.xlim(max(x_values)+(max(x_values)*0.1), min(x_values)-(min(x_values)*0.1))
+                plt.ylim(min(z_values)-(min(z_values)*0.1), max(z_values)+(max(z_values)*0.1))
 
                 img = plt.imread("./assets/images/minecraft/forsenE.png")
                 imagebox = OffsetImage(img, zoom=0.1)
@@ -609,34 +617,58 @@ class Minecraft_Commands(commands.Cog):
             plt.close()
 
     async def startMain(self):
-        main_thread = threading.Thread(target=self.main)
-        main_thread.start()
-        self.main_thread = main_thread
+        self.igt.timeIGT = datetime.time(minute=0, second=0, microsecond=0)
+        
+        self.biome.biomeID = "unknown"
+        
+        self.achievement.phase = ["Start"]
+        
+        self.coordinates.coordsList = []
+        self.coordinates.achievementCheck = [["Start", 0]]
+        self.coordinates.all_achievementCheck = self.coordinates.achievementCheck
+        
+        self.other.resultTemplate = None
+        self.other.deathCounter = 0
+        self.other.generatingCounter = 0
+        self.other.isSpectator = False
+        
+        self.stopMainFlag = False
+        self.main_thread = threading.Thread(target=self.main)
+        self.main_thread.start()
 
     async def stopMain(self):
         self.stopMainFlag = True
         self.main_thread.join()
 
-    def main(self):
+    async def startStreamlink(self):
         session = streamlink.Streamlink()
-        _, pluginclass, resolved_url = session.resolve_url("https://www.twitch.tv/forsen")
+        _, pluginclass, resolved_url = session.resolve_url("twitch.tv/forsen")
 
         options = Options()
         options.set("low-latency", True)
         options.set("disable-ads", True)
-        options.set("api-header", {"Authorization": self.client.twitch.get_user_auth_token()})
+        
+        if hasattr(self.client.twitchAPI, 'TWITCH') and self.client.twitchAPI.TWITCH.get_user_auth_token():
+            options.set("api-header", {"Authorization": self.client.twitchAPI.TWITCH.get_user_auth_token()})
 
         plugin = pluginclass(session, resolved_url, options)
 
         streams = plugin.streams()
-        if "1080p60" not in streams:
-            raise Exception("forsen not live")
-        stream = streams["1080p60"]
+        for stream_interation in streams:
+            if stream_interation.startswith("1080p"):
+                stream = streams[stream_interation]
 
-        cap = cv2.VideoCapture(stream.url)
+        if not streams or not stream:
+            print("Stream not found")
+            return
 
-        # cap = cv2.VideoCapture("./assets/forsen.mp4")
-        # cap.set(cv2.CAP_PROP_POS_MSEC, (141 * 60 + 00) * 1000)
+        self.cap = cv2.VideoCapture(stream.url)
+
+    def main(self):
+        asyncio.run(self.startStreamlink())
+
+        # self.cap = cv2.VideoCapture("./assets/forsen.mp4")
+        # self.cap.set(cv2.CAP_PROP_POS_MSEC, (141 * 60 + 00) * 1000)
 
         igt_thread = threading.Thread(target=self.igt.getIGT)
         igt_thread.start()
@@ -658,7 +690,7 @@ class Minecraft_Commands(commands.Cog):
 
         while not self.stopMainFlag:
             try:
-                ret, frame = cap.read()
+                ret, frame = self.cap.read()
                 if not ret:
                     continue
 
@@ -672,7 +704,7 @@ class Minecraft_Commands(commands.Cog):
             except Exception:
                 continue
 
-        cap.release()
+        self.cap.release()
         igt_thread.join()
         biome_thread.join()
         achievement_thread.join()

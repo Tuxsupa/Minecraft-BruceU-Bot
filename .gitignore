@@ -3,8 +3,8 @@ __pycache__
 .ruff_cache/
 .vscode/
 .env
+.dockerignore
+Dockerfile
 fly.toml
 coordinates.png
-forsen.mp4
-forsen8.mp4
-forsen9.mp4
+*.mp4
