@@ -1,6 +1,7 @@
 import os
 import asyncio
 import discord
+# import psycopg
 
 from discord.ext.commands import Bot
 from discord.ext import commands
@@ -18,7 +19,6 @@ class DiscordBot(Bot):
         self.prefix = prefix
         self.loop = loop
         self.isTest = isTest
-        self.minecraft = None
 
         self.app = app
         self.app.config['CLIENT'] = self
@@ -39,9 +39,12 @@ class DiscordBot(Bot):
                 await self.load_extension(f"cogs.{name}")
 
         self.DEV = await self.fetch_user(os.environ["OWNER_ID"])
+        
+        from cogs.minecraft import Minecraft
+        self.minecraft:Minecraft = self.get_cog("Minecraft")
 
-        from utils import twitchAPI
-        self.twitchAPI = twitchAPI.TwitchAPI(client=self, loop=self.loop)
+        from utils.twitchAPI import TwitchAPI
+        self.twitchAPI = TwitchAPI(client=self, loop=self.loop)
         self.app.config['TWITCH_API'] = self.twitchAPI
 
         self.loop.create_task(self.twitchAPI.main())

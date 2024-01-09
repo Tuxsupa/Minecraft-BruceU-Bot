@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import time
 import datetime
 import threading
@@ -18,6 +19,189 @@ from utils import default
 
 load_dotenv()
 plt.switch_backend('agg')
+
+
+class Minecraft(commands.Cog):
+    def __init__(self, client: default.DiscordBot):
+        self.client = client
+        self.frame = None
+        self.stopMainFlag = False
+
+        self.lock = threading.Lock()
+        self.igt = IGT(self.client)
+        self.biome = Biome(self.client)
+        self.achievement = Achievement(self.client)
+        self.coordinates = Coordinates(self.client)
+        # self.inventory = Inventory(self.client)
+        self.other = Other(self.client)
+
+    def timeToString(self, timeIGT: datetime.time):
+        formattedIGT = timeIGT.strftime("%M:%S.%f")
+        return formattedIGT[:-3]
+
+    @commands.hybrid_command(aliases=["m"], description="Forsen's Minecraft Status")
+    @commands.cooldown(1, 10, commands.BucketType.channel)
+    @commands.guild_only()
+    async def minecraft(self, ctx: commands.Context):
+        twitchAPI = self.client.twitchAPI
+        if twitchAPI.isIntro is False and twitchAPI.isOnline is True and twitchAPI.game == "Minecraft":
+            embed = discord.Embed(title="Forsen's Minecraft Status", description=None, color=0x000000, timestamp=ctx.message.created_at)
+            embed.add_field(name="Ingame Time:", value=self.timeToString(self.igt.timeIGT), inline=True)
+            embed.add_field(name="Biome:", value=self.biome.biomeText[self.biome.biomeID], inline=True)
+            embed.add_field(name="Phase:", value=self.achievement.numberStructute(), inline=True)
+            embed.add_field(name="Seeds:", value=self.other.generatingCounter, inline=True)
+            embed.add_field(name="Deaths:", value=self.other.deathCounter, inline=True)
+            embed.set_thumbnail(url="https://cdn.discordapp.com/attachments/988994875234082829/1139301216459964436/3x.gif")
+            embed.set_author(name=ctx.author, icon_url=ctx.author.display_avatar.url)
+            embed.set_footer(text="Bot made by Tuxsuper", icon_url=self.client.DEV.display_avatar.url)
+            await ctx.send(embed=embed)
+
+    @commands.hybrid_command(aliases=["c"], description="Forsen's Minecraft Coords")
+    @commands.cooldown(1, 10, commands.BucketType.channel)
+    @commands.guild_only()
+    async def coords(self, ctx: commands.Context):
+        twitchAPI = self.client.twitchAPI
+        if twitchAPI.isIntro is False and twitchAPI.isOnline is True and twitchAPI.game == "Minecraft":
+            if len(self.coordinates.coordsList) >= 2:
+                x_values = [coord[0] for coord in self.coordinates.coordsList[:-2]]
+                z_values = [coord[2] for coord in self.coordinates.coordsList[:-2]]
+
+                plt.plot(x_values, z_values, color='black')
+                
+                max_x, min_x = max(x_values), min(x_values)
+                max_z, min_z = max(z_values), min(z_values)
+                
+                diff_x = (max_x-min_x)*0.1
+                diff_z = (max_z-min_z)*0.1
+
+                plt.xlim(max_x+diff_x, min_x-diff_x)
+                plt.ylim(min_z-diff_z, max_z+diff_z)
+
+                img = plt.imread("./assets/images/minecraft/forsenE.png")
+                imagebox = OffsetImage(img, zoom=0.1)
+                ab = AnnotationBbox(imagebox, (self.coordinates.coordsList[-2:][0][0], self.coordinates.coordsList[-2:][0][2]), frameon=False)
+                plt.gca().add_artist(ab)
+
+                for phaseCoords in self.coordinates.achievementCheck:
+                    phase = phaseCoords[0]
+                    check = phaseCoords[1]
+
+                    if check != -1:
+                        continue
+                    if len(phaseCoords) < 3:
+                        continue
+
+                    coords = phaseCoords[2]
+
+                    plt.scatter(coords[0], coords[2], s=100, zorder=2)
+                    plt.annotate(phase, (coords[0], coords[2]), textcoords="offset points", xytext=(0,15), ha='center', fontsize=12)
+
+            plt.xlabel('X Coordinate')
+            plt.ylabel('Z Coordinate')
+            plt.title('Forsen Coordinates')
+
+            filename = "./assets/images/coordinates.png"
+            plt.savefig(filename)
+            image = discord.File(filename)
+
+            await ctx.send(file = image)
+
+            plt.close()
+
+    async def startMain(self):
+        self.igt.timeIGT = datetime.time(minute=0, second=0, microsecond=0)
+        
+        self.biome.biomeID = "unknown"
+        
+        self.achievement.phase = ["Start"]
+        
+        self.coordinates.coordsList = []
+        self.coordinates.achievementCheck = [["Start", 0]] # Dimension POI
+        self.coordinates.all_achievementCheck = self.coordinates.achievementCheck # Seed (all) POI
+        
+        self.other.resultTemplate = None
+        self.other.deathCounter = 0
+        self.other.generatingCounter = 0
+        self.other.isSpectator = False
+        
+        self.stopMainFlag = False
+        self.main_thread = threading.Thread(target=self.main)
+        self.main_thread.start()
+
+    async def stopMain(self):
+        self.stopMainFlag = True
+        self.main_thread.join()
+
+    async def startStreamlink(self):
+        session = streamlink.Streamlink()
+        _, pluginclass, resolved_url = session.resolve_url("twitch.tv/forsen")
+
+        options = Options()
+        options.set("low-latency", True)
+        options.set("disable-ads", True)
+
+        with contextlib.suppress(AttributeError):
+            options.set("api-header", {"Authorization": self.client.twitchAPI.TWITCH.get_user_auth_token()})
+            
+        plugin = pluginclass(session, resolved_url, options)
+        streams = plugin.streams()
+        for stream_interation in streams:
+            if stream_interation.startswith("1080p"):
+                stream = streams[stream_interation]
+
+        if not streams or not stream:
+            print("Stream not found")
+            return
+
+        self.cap = cv2.VideoCapture(stream.url)
+
+    def main(self):
+        asyncio.run(self.startStreamlink())
+
+        # self.cap = cv2.VideoCapture("./assets/forsen.mp4")
+        # self.cap.set(cv2.CAP_PROP_POS_MSEC, (141 * 60 + 00) * 1000)
+
+        igt_thread = threading.Thread(target=self.igt.getIGT)
+        igt_thread.start()
+
+        biome_thread = threading.Thread(target=self.biome.getBiome)
+        biome_thread.start()
+
+        achievement_thread = threading.Thread(target=self.achievement.getAchievement)
+        achievement_thread.start()
+
+        coords_thread = threading.Thread(target=self.coordinates.getCoords)
+        coords_thread.start()
+
+        # inventory_thread = threading.Thread(target=self.inventory.getInventory)
+        # inventory_thread.start()
+
+        other_thread = threading.Thread(target=self.other.getOthers)
+        other_thread.start()
+
+        while not self.stopMainFlag:
+            try:
+                ret, frame = self.cap.read()
+                if not ret:
+                    continue
+
+                self.frame = frame
+
+                # cv2.imshow("camCapture", frame)
+                # cv2.waitKey(1)
+
+                time.sleep(5 / 1000)
+
+            except Exception:
+                continue
+
+        self.cap.release()
+        igt_thread.join()
+        biome_thread.join()
+        achievement_thread.join()
+        coords_thread.join()
+        # inventory_thread.join()
+        other_thread.join()
 
 
 class IGT():
@@ -186,8 +370,10 @@ class Achievement():
 
     async def pingStronghold(self, phase, oldPhase):
         if not self.client.isTest and (phase != oldPhase and phase == "Stronghold"):
-            discordChannel = await self.client.fetch_channel(1052307685414027264)
-            await discordChannel.send(content="<@&1137857293363449866> THE RUN")
+            SNIPA_CHANNEL = 1081602472516276294
+            PING_ROLE = 1137857293363449866
+            discordChannel = await (self.client.get_channel(SNIPA_CHANNEL) or await self.client.fetch_channel(SNIPA_CHANNEL))
+            await discordChannel.send(content=f"<@&{PING_ROLE}> THE RUN")
 
     def numberStructute(self):
         if self.phase[-1] in ("Bastion", "Fortress"):
@@ -314,17 +500,14 @@ class Coordinates():
             return None
 
     def remove_outlier_coords(self, numbers):
-        try:
-            diffs = np.diff(numbers, axis=0)
-            threshold = 10
-            distances = np.linalg.norm(diffs, axis=1)
-        except Exception as e:
-                print(e)
-
+        diffs = np.diff(numbers, axis=0)
+        threshold = 10
+        distances = np.linalg.norm(diffs, axis=1)
+    
         outlierIndices = [
             i - 1
             for i, distance in enumerate(distances[-2:])
-            if distances[-2:][i - 1] > threshold and distance > threshold
+            if distances[-2:][i-1] > threshold and distance > threshold
         ]
 
         for row in outlierIndices:
@@ -332,17 +515,13 @@ class Coordinates():
             if self.achievementCheck[-1][1] >= 0:
                 self.achievementCheck[-1][1] -= 1
 
-        if len(self.coordsList) >= 2:
-            try:
-                if len(self.achievementCheck) > 0 and len(self.achievementCheck[-1]) < 3:
-                    if self.achievementCheck[-1][1] == 1:
-                        self.achievementCheck[-1].append(self.coordsList[-2:][0])
-                        self.achievementCheck[-1][1] = -1
-
-                    elif self.achievementCheck[-1][1] == 0:
-                        self.achievementCheck[-1][1] += 1
-            except Exception as e:
-                print(e)
+        if len(self.coordsList) >= 2 and (len(self.achievementCheck) > 0 and len(self.achievementCheck[-1]) < 3):
+            if self.achievementCheck[-1][1] == 1:
+                self.achievementCheck[-1].append(self.coordsList[-2:][0])
+                self.achievementCheck[-1][1] = -1
+        
+            elif self.achievementCheck[-1][1] == 0:
+                self.achievementCheck[-1][1] += 1
 
     def getCoords(self):
         while not self.client.minecraft.stopMainFlag:
@@ -367,8 +546,11 @@ class Coordinates():
                     continue
 
                 numbers = self.append_coord_numbers(numbers)
-                
-                self.remove_outlier_coords(numbers)
+                    
+                try:
+                    self.remove_outlier_coords(numbers)
+                except Exception as e:
+                    print(e)
 
 
 # class Inventory():
@@ -464,25 +646,25 @@ class Other():
             template = cv2.imread(templatePath)
             self.templates.append(template)
 
-    def loading(self):
-        self.client.minecraft.coordinates.coordsList = []
-        self.client.minecraft.coordinates.achievementCheck = []
-        if all(phase in self.client.minecraft.achievement.phase for phase in ["Bastion", "Fortress"]):
-            if "Nether Exit" not in self.client.minecraft.achievement.phase:
-                self.client.minecraft.achievement.phase.append("Nether Exit")
-                self.client.minecraft.coordinates.achievementCheck = [["Nether Exit", 0]]
-                self.client.minecraft.coordinates.all_achievementCheck.append(["Nether Exit", 0])
-            else:
-                self.client.minecraft.coordinates.achievementCheck = [self.client.minecraft.coordinates.all_achievementCheck[-2]]
+    def loading(self, minecraft: Minecraft):
+        minecraft.coordinates.coordsList = []
+        minecraft.coordinates.achievementCheck = []
+        if all(phase in minecraft.achievement.phase for phase in ["Bastion", "Fortress"]):
+            if "Nether Exit" not in minecraft.achievement.phase:
+                minecraft.achievement.phase.append("Nether Exit")
+                minecraft.coordinates.achievementCheck = [["Nether Exit", 0]]
+                minecraft.coordinates.all_achievementCheck.append(["Nether Exit", 0])
+            elif "Nether Exit" in minecraft.coordinates.all_achievementCheck[-1]:
+                minecraft.coordinates.achievementCheck = [minecraft.coordinates.all_achievementCheck[-2]]
 
-    def generating(self):
+    def generating(self, minecraft: Minecraft):
         self.generatingCounter += 1
-        self.client.minecraft.igt.timeIGT = datetime.time(minute=0, second=0, microsecond=0)
-        self.client.minecraft.biome.biomeID = "unknown"
-        self.client.minecraft.achievement.phase = ["Start"]
-        self.client.minecraft.coordinates.coordsList = []
-        self.client.minecraft.coordinates.achievementCheck = [["Start", 0]]
-        self.client.minecraft.coordinates.all_achievementCheck = [["Start", 0]]
+        minecraft.igt.timeIGT = datetime.time(minute=0, second=0, microsecond=0)
+        minecraft.biome.biomeID = "unknown"
+        minecraft.achievement.phase = ["Start"]
+        minecraft.coordinates.coordsList = []
+        minecraft.coordinates.achievementCheck = [["Start", 0]]
+        minecraft.coordinates.all_achievementCheck = [["Start", 0]]
         self.isSpectator = False
 
     def death(self):
@@ -492,11 +674,12 @@ class Other():
         self.isSpectator = True
 
     def getOthers(self):
-        while not self.client.minecraft.stopMainFlag:
+        minecraft = self.client.minecraft
+        while not minecraft.stopMainFlag:
             time.sleep(1/30)
 
-            with self.client.minecraft.lock:
-                frame = self.client.minecraft.frame
+            with minecraft.lock:
+                frame = minecraft.frame
 
             if frame is None:
                 continue
@@ -524,194 +707,14 @@ class Other():
 
                 match newResultTemplate:
                     case "Loading":
-                        self.loading()
+                        self.loading(minecraft)
                     case "Generating":
-                        self.generating()
+                        self.generating(minecraft)
                     case "Died":
                         self.death()
                     case "Spectator":
                         self.spectator()
 
 
-class Minecraft_Commands(commands.Cog):
-    def __init__(self, client: default.DiscordBot):
-        self.client = client
-        self.frame = None
-        self.stopMainFlag = False
-
-        self.lock = threading.Lock()
-        self.igt = IGT(self.client)
-        self.biome = Biome(self.client)
-        self.achievement = Achievement(self.client)
-        self.coordinates = Coordinates(self.client)
-        # self.inventory = Inventory(self.client)
-        self.other = Other(self.client)        
-
-        self.client.minecraft = self
-
-    def timeToString(self, timeIGT):
-        formattedIGT = timeIGT.strftime("%M:%S.%f")
-        return formattedIGT[:-3]
-
-    @commands.hybrid_command(aliases=["m"], description="Forsen's Minecraft Status")
-    @commands.cooldown(1, 10, commands.BucketType.channel)
-    @commands.guild_only()
-    async def minecraft(self, ctx: commands.Context):
-        twitchAPI = self.client.twitchAPI
-        if twitchAPI.isIntro is False and twitchAPI.isOnline is True and twitchAPI.game == "Minecraft":
-            embed = discord.Embed(title="Forsen's Minecraft Status", description=None, color=0x000000, timestamp=ctx.message.created_at)
-            embed.add_field(name="Ingame Time:", value=self.timeToString(self.igt.timeIGT), inline=True)
-            embed.add_field(name="Biome:", value=self.biome.biomeText[self.biome.biomeID], inline=True)
-            embed.add_field(name="Phase:", value=self.achievement.numberStructute(), inline=True)
-            embed.add_field(name="Seeds:", value=self.other.generatingCounter, inline=True)
-            embed.add_field(name="Deaths:", value=self.other.deathCounter, inline=True)
-            embed.set_thumbnail(url="https://cdn.discordapp.com/attachments/988994875234082829/1139301216459964436/3x.gif")
-            embed.set_author(name=ctx.author, icon_url=ctx.author.display_avatar.url)
-            embed.set_footer(text="Bot made by Tuxsuper", icon_url=self.client.DEV.display_avatar.url)
-            await ctx.send(embed=embed)
-
-    @commands.hybrid_command(aliases=["c"], description="Forsen's Minecraft Coords")
-    @commands.cooldown(1, 10, commands.BucketType.channel)
-    @commands.guild_only()
-    async def coords(self, ctx: commands.Context):
-        twitchAPI = self.client.twitchAPI
-        if twitchAPI.isIntro is False and twitchAPI.isOnline is True and twitchAPI.game == "Minecraft":
-            if len(self.coordinates.coordsList) >= 2:
-                x_values = [coord[0] for coord in self.coordinates.coordsList[:-2]]
-                z_values = [coord[2] for coord in self.coordinates.coordsList[:-2]]
-
-                plt.plot(x_values, z_values, color='black')
-
-                plt.xlim(max(x_values)+(max(x_values)*0.1), min(x_values)-(min(x_values)*0.1))
-                plt.ylim(min(z_values)-(min(z_values)*0.1), max(z_values)+(max(z_values)*0.1))
-
-                img = plt.imread("./assets/images/minecraft/forsenE.png")
-                imagebox = OffsetImage(img, zoom=0.1)
-                ab = AnnotationBbox(imagebox, (self.coordinates.coordsList[-2:][0][0], self.coordinates.coordsList[-2:][0][2]), frameon=False)
-                plt.gca().add_artist(ab)
-
-                for phaseCoords in self.coordinates.achievementCheck:
-                    phase = phaseCoords[0]
-                    check = phaseCoords[1]
-
-                    if check != -1:
-                        continue
-                    if len(phaseCoords) < 3:
-                        continue
-
-                    coords = phaseCoords[2]
-
-                    plt.scatter(coords[0], coords[2], s=100, zorder=2)
-                    plt.annotate(phase, (coords[0], coords[2]), textcoords="offset points", xytext=(0,15), ha='center', fontsize=12)
-
-            plt.xlabel('X Coordinate')
-            plt.ylabel('Z Coordinate')
-            plt.title('Forsen Coordinates')
-
-            filename = "coordinates.png"
-            plt.savefig(filename)
-            image = discord.File(filename)
-
-            await ctx.send(file = image)
-
-            plt.close()
-
-    async def startMain(self):
-        self.igt.timeIGT = datetime.time(minute=0, second=0, microsecond=0)
-        
-        self.biome.biomeID = "unknown"
-        
-        self.achievement.phase = ["Start"]
-        
-        self.coordinates.coordsList = []
-        self.coordinates.achievementCheck = [["Start", 0]]
-        self.coordinates.all_achievementCheck = self.coordinates.achievementCheck
-        
-        self.other.resultTemplate = None
-        self.other.deathCounter = 0
-        self.other.generatingCounter = 0
-        self.other.isSpectator = False
-        
-        self.stopMainFlag = False
-        self.main_thread = threading.Thread(target=self.main)
-        self.main_thread.start()
-
-    async def stopMain(self):
-        self.stopMainFlag = True
-        self.main_thread.join()
-
-    async def startStreamlink(self):
-        session = streamlink.Streamlink()
-        _, pluginclass, resolved_url = session.resolve_url("twitch.tv/forsen")
-
-        options = Options()
-        options.set("low-latency", True)
-        options.set("disable-ads", True)
-        
-        if hasattr(self.client.twitchAPI, 'TWITCH') and self.client.twitchAPI.TWITCH.get_user_auth_token():
-            options.set("api-header", {"Authorization": self.client.twitchAPI.TWITCH.get_user_auth_token()})
-
-        plugin = pluginclass(session, resolved_url, options)
-
-        streams = plugin.streams()
-        for stream_interation in streams:
-            if stream_interation.startswith("1080p"):
-                stream = streams[stream_interation]
-
-        if not streams or not stream:
-            print("Stream not found")
-            return
-
-        self.cap = cv2.VideoCapture(stream.url)
-
-    def main(self):
-        asyncio.run(self.startStreamlink())
-
-        # self.cap = cv2.VideoCapture("./assets/forsen.mp4")
-        # self.cap.set(cv2.CAP_PROP_POS_MSEC, (141 * 60 + 00) * 1000)
-
-        igt_thread = threading.Thread(target=self.igt.getIGT)
-        igt_thread.start()
-
-        biome_thread = threading.Thread(target=self.biome.getBiome)
-        biome_thread.start()
-
-        achievement_thread = threading.Thread(target=self.achievement.getAchievement)
-        achievement_thread.start()
-
-        coords_thread = threading.Thread(target=self.coordinates.getCoords)
-        coords_thread.start()
-
-        # inventory_thread = threading.Thread(target=self.inventory.getInventory)
-        # inventory_thread.start()
-
-        other_thread = threading.Thread(target=self.other.getOthers)
-        other_thread.start()
-
-        while not self.stopMainFlag:
-            try:
-                ret, frame = self.cap.read()
-                if not ret:
-                    continue
-
-                self.frame = frame
-
-                # cv2.imshow("camCapture", frame)
-                # cv2.waitKey(1)
-
-                time.sleep(5 / 1000)
-
-            except Exception:
-                continue
-
-        self.cap.release()
-        igt_thread.join()
-        biome_thread.join()
-        achievement_thread.join()
-        coords_thread.join()
-        # inventory_thread.join()
-        other_thread.join()
-
-
 async def setup(client: default.DiscordBot):
-    await client.add_cog(Minecraft_Commands(client))
+    await client.add_cog(Minecraft(client))

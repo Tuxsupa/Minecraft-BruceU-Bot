@@ -4,6 +4,7 @@ import asyncio
 import discord
 
 from quart import redirect, request
+# from quart_auth import basic_auth_required, QuartAuth
 from dotenv import load_dotenv
 from utils import default
 
@@ -40,7 +41,8 @@ class TwitchAPI():
         token, refresh_token = await self.auth.authenticate(user_token=code)
         await self.TWITCH.set_user_authentication(token, self.target_scope, refresh_token)
         
-        await self.client.minecraft.startStreamlink()
+        if self.isOnline and self.game == "Minecraft":
+            await self.client.minecraft.startStreamlink()
 
         return redirect('/')
 

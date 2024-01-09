@@ -1,10 +1,11 @@
 __pycache__
 .pytest_cache/
 .ruff_cache/
+.venv
+.vs/
 .vscode/
 .env
 .dockerignore
 Dockerfile
-fly.toml
-coordinates.png
 *.mp4
+datasets/
